@@ -1,0 +1,32 @@
+plugins {
+    id 'java-library'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    
+}
+
+testing {
+    suites {
+        test {
+            useJUnitJupiter('6.0.1')
+        }
+    }
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(24)
+    }
+}
+
+task runSample(type: JavaExec) {
+    group = "Execution"
+    description = "Test A11Y integration via sample program"
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'net.buildabrowser.ak4j.sample.MainTest'
+}
