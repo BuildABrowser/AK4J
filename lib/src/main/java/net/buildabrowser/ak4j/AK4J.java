@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 
 import net.buildabrowser.ak4j.imp.AK4JHandleImp;
+import net.buildabrowser.ak4j.imp.AKNodeCallsImp;
 import net.buildabrowser.ak4j.imp.UnixAKAdapter;
 
 public final class AK4J {
@@ -32,7 +33,7 @@ public final class AK4J {
   }
 
   public static AK4JHandle init(
-    AK4JCallbacks callbacks
+    AKCallbacks callbacks
   ) throws IOException {
     File copiedFile = File.createTempFile("libaccesskit", ".so");
     Files.copy(
@@ -43,7 +44,10 @@ public final class AK4J {
 
     Linker linker = Linker.nativeLinker();
     AKAdapter adapter = new UnixAKAdapter(linker, callbacks);
-    return new AK4JHandleImp(adapter);
+    AKNodeCalls nodeCalls = new AKNodeCallsImp(linker);
+    AK4JHandle handle = new AK4JHandleImp(linker, adapter, nodeCalls);
+    adapter.start(handle);
+    return handle;
   }
 
 }

@@ -11,45 +11,45 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
-import net.buildabrowser.ak4j.AK4JCallbacks;
+import net.buildabrowser.ak4j.AK4JHandle;
 import net.buildabrowser.ak4j.AKAdapter;
+import net.buildabrowser.ak4j.AKCallbacks;
 
 public class UnixAKAdapter implements AKAdapter {
 
+  private final Linker linker;
   private final Arena arena;
+  private final Consumer<AK4JHandle> startFunc;
+
+  // TODO: Reinterpret return values to use the arena
+  
   private final MethodHandle freeHandle;
   private final MethodHandle debugHandle;
+  private final MethodHandle updateHandle;
   private final MethodHandle setFocusHandle;
-  private final MemorySegment adapterPointer;
+
+  private MemorySegment adapterPointer;
   
-  public UnixAKAdapter(Linker linker, AK4JCallbacks callbacks) {
+  public UnixAKAdapter(
+    Linker linker,
+    AKCallbacks callbacks
+  ) {
     try {
-      this.arena = Arena.ofShared();
+      this.linker = linker;
+      // Unfortunately ofShared does not seem to shutdown correctly (throws an exception)
+      this.arena = Arena.ofAuto();
+      this.startFunc = ak4j -> CommonUtil.rethrowV(
+        () -> start(callbacks, ak4j));
 
-      MemorySegment activationHandlerPtr = userDataConsumerToFunctionPointer(
-        linker, _ -> callbacks.onActivation());
-      MemorySegment actionHandlerPtr = userDataConsumerToFunctionPointer(
-        linker, _ -> callbacks.onAction());
-      MemorySegment deactivationHandlerPtr = userDataConsumerToFunctionPointer(
-        linker, _ -> callbacks.onDeactivation());
+      this.freeHandle = getFreeMethodHandle();
+      this.updateHandle = getUpdateMethodHandle();
+      this.debugHandle = getDebugMethodHandle();
+      this.setFocusHandle = getSetFocusMethodHandle();
 
-      this.freeHandle = getFreeMethodHandle(linker);
-
-      MethodHandle newMethodHandle = getNewMethodHandle(linker);
-      this.adapterPointer = (MemorySegment) newMethodHandle.invokeExact(
-        activationHandlerPtr, // activation_handler
-        MemorySegment.NULL, // activation_handler_userdata
-        actionHandlerPtr, // action_handler
-        MemorySegment.NULL, // action_handler_userdata
-        deactivationHandlerPtr, // deactivation_handler
-        MemorySegment.NULL  // deactivation_handler_userdata
-      );
-
-      this.debugHandle = getDebugMethodHandler(linker);
-      this.setFocusHandle = getSetFocusMethodHandler(linker);
-
-      setFocus(true);
+      // setFocus(true);
     } catch (RuntimeException e) {
       throw e;
     } catch (Throwable e) {
@@ -57,7 +57,62 @@ public class UnixAKAdapter implements AKAdapter {
     }
   }
 
-  private MethodHandle getNewMethodHandle(Linker linker) {
+  @Override
+  public void update(Supplier<MemorySegment> updateFunc) {
+    // TODO: Maybe take the update func in the constructor, re-use it
+    MemorySegment updateFuncPtr = CommonUtil.rethrow(() ->
+      updateFunctionToFunctionPointer(_ -> updateFunc.get()));
+    // For some reason, the JVM requires the brackets for invokeExact to work correctly
+    CommonUtil.rethrowV(() -> {updateHandle.invokeExact(
+      adapterPointer, // adapter
+      updateFuncPtr, // update_factory
+      MemorySegment.NULL // update_factory_userdata
+    );});
+  }
+
+  @Override
+  public void setFocus(boolean focused) {
+    CommonUtil.rethrowV(() -> {
+      setFocusHandle.invokeExact(adapterPointer, focused);});
+  }
+
+  @Override
+  public String debug() {
+    MemorySegment resultPtr = CommonUtil.rethrow(
+      () -> (MemorySegment) debugHandle.invokeExact(adapterPointer));
+    return resultPtr.reinterpret(Long.MAX_VALUE).getString(0);
+  }
+
+  @Override
+  public void start(AK4JHandle ak4jHandle) {
+    startFunc.accept(ak4jHandle);
+  }
+
+  private void start(
+    AKCallbacks callbacks,
+    AK4JHandle ak4jHandle
+  ) throws Throwable {
+    MemorySegment activationHandlerPtr = updateFunctionToFunctionPointer(
+      _ -> callbacks.onActivation(ak4jHandle));
+    MemorySegment actionHandlerPtr = userDataConsumerToFunctionPointer(
+      _ -> callbacks.onAction(ak4jHandle));
+    MemorySegment deactivationHandlerPtr = userDataConsumerToFunctionPointer(
+      _ -> callbacks.onDeactivation(ak4jHandle));
+
+    MethodHandle newMethodHandle = getNewMethodHandle();
+    this.adapterPointer = (MemorySegment) newMethodHandle.invokeExact(
+      activationHandlerPtr, // activation_handler
+      MemorySegment.NULL, // activation_handler_userdata
+      actionHandlerPtr, // action_handler
+      MemorySegment.NULL, // action_handler_userdata
+      deactivationHandlerPtr, // deactivation_handler
+      MemorySegment.NULL  // deactivation_handler_userdata
+    );
+
+    setFocus(true);
+  }
+
+  private MethodHandle getNewMethodHandle() {
     SymbolLookup symbolLookup = SymbolLookup.loaderLookup();
     MemorySegment newMethodAddr = symbolLookup.findOrThrow("accesskit_unix_adapter_new");
     FunctionDescriptor newMethodDesc = FunctionDescriptor.of(
@@ -73,7 +128,7 @@ public class UnixAKAdapter implements AKAdapter {
     return linker.downcallHandle(newMethodAddr, newMethodDesc);
   }
 
-  private MethodHandle getFreeMethodHandle(Linker linker) {
+  private MethodHandle getFreeMethodHandle() {
     SymbolLookup symbolLookup = SymbolLookup.loaderLookup();
     MemorySegment newMethodAddr = symbolLookup.findOrThrow("accesskit_unix_adapter_free");
     FunctionDescriptor newMethodDesc = FunctionDescriptor.ofVoid(
@@ -83,20 +138,23 @@ public class UnixAKAdapter implements AKAdapter {
     return linker.downcallHandle(newMethodAddr, newMethodDesc);
   }
 
-  private MethodHandle getDebugMethodHandler(Linker linker) {
+  private MethodHandle getUpdateMethodHandle() {
     SymbolLookup symbolLookup = SymbolLookup.loaderLookup();
-    MemorySegment debugMethodAddr = symbolLookup.findOrThrow("accesskit_unix_adapter_debug");
-    FunctionDescriptor debugMethodDesc = FunctionDescriptor.of(
-      ValueLayout.ADDRESS, // RTN
-      ValueLayout.ADDRESS  // adapter
+    MemorySegment setFocusMethodAddr = symbolLookup.findOrThrow(
+      "accesskit_unix_adapter_update_if_active");
+    FunctionDescriptor setFocusMethodDesc = FunctionDescriptor.ofVoid(
+      ValueLayout.ADDRESS, // adapter
+      ValueLayout.ADDRESS, // update_factory
+      ValueLayout.ADDRESS  // update_factory_userdata
     );
 
-    return linker.downcallHandle(debugMethodAddr, debugMethodDesc);
+    return linker.downcallHandle(setFocusMethodAddr, setFocusMethodDesc);
   }
 
-  private MethodHandle getSetFocusMethodHandler(Linker linker) {
+  private MethodHandle getSetFocusMethodHandle() {
     SymbolLookup symbolLookup = SymbolLookup.loaderLookup();
-    MemorySegment setFocusMethodAddr = symbolLookup.findOrThrow("accesskit_unix_adapter_update_window_focus_state");
+    MemorySegment setFocusMethodAddr = symbolLookup.findOrThrow(
+      "accesskit_unix_adapter_update_window_focus_state");
     FunctionDescriptor setFocusMethodDesc = FunctionDescriptor.ofVoid(
       ValueLayout.ADDRESS, // adapter
       ValueLayout.JAVA_BOOLEAN // is_focused
@@ -105,20 +163,36 @@ public class UnixAKAdapter implements AKAdapter {
     return linker.downcallHandle(setFocusMethodAddr, setFocusMethodDesc);
   }
 
-  @Override
-  public String debug() {
-    MemorySegment resultPtr = (MemorySegment) CommonUtil.rethrow(
-      () -> debugHandle.invokeExact(adapterPointer));
-    return resultPtr.reinterpret(Long.MAX_VALUE).getString(0);
+  private MethodHandle getDebugMethodHandle() {
+    SymbolLookup symbolLookup = SymbolLookup.loaderLookup();
+    MemorySegment debugMethodAddr = symbolLookup.findOrThrow("accesskit_unix_adapter_debug");
+    FunctionDescriptor debugMethodDesc = FunctionDescriptor.of(
+      ValueLayout.ADDRESS, // Return Value
+      ValueLayout.ADDRESS  // adapter
+    );
+
+    return linker.downcallHandle(debugMethodAddr, debugMethodDesc);
   }
 
-  @Override
-  public void setFocus(boolean focused) {
-    CommonUtil.rethrowV(() -> setFocusHandle.invokeExact(adapterPointer, focused));
+  // TODO: Look up method handles in advance?
+  private MemorySegment updateFunctionToFunctionPointer(
+    Function<MemorySegment, MemorySegment> updateFunction
+  ) throws NoSuchMethodException, IllegalAccessException {
+    MethodType methodType = MethodType.methodType(Object.class, Object.class);
+    MethodHandle methodHandle = MethodHandles.lookup()
+      .findVirtual(Function.class, "apply", methodType)
+      .bindTo(updateFunction)
+      .asType(MethodType.methodType(MemorySegment.class, MemorySegment.class));
+
+    FunctionDescriptor updateSupplierDesc = FunctionDescriptor.of(
+      ValueLayout.ADDRESS, // Return Value
+      ValueLayout.ADDRESS  // Userdata
+    ); 
+    return linker.upcallStub(methodHandle, updateSupplierDesc, arena);
   }
 
   private MemorySegment userDataConsumerToFunctionPointer(
-    Linker linker, Consumer<Object> consumer
+    Consumer<Object> consumer
   ) throws NoSuchMethodException, IllegalAccessException {
     MethodType methodType = MethodType.methodType(void.class, Object.class);
     MethodHandle methodHandle = MethodHandles.lookup()
@@ -134,7 +208,7 @@ public class UnixAKAdapter implements AKAdapter {
   public void close() throws IOException {
     try {
       freeHandle.invokeExact(adapterPointer);
-      arena.close();
+      // Using auto arena, don't need to close
     } catch (IOException | RuntimeException e) {
       throw e;
     } catch (Throwable e) {

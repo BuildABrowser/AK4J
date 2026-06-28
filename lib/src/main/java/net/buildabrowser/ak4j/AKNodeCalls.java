@@ -1,0 +1,16 @@
+package net.buildabrowser.ak4j;
+
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+
+// Nodes are highly common, so referring to them via their MemorySegment
+// instead of a Java wrapper reduces their wrapper tax
+public interface AKNodeCalls {
+
+  MemorySegment create(AKRole role, Arena scope);
+  
+  void pushChild(MemorySegment parent, long childId);
+
+  void setBounds(MemorySegment segment, float x, float y, float w, float h);
+
+}
