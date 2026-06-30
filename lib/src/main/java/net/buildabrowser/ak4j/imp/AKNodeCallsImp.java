@@ -7,6 +7,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.nio.charset.StandardCharsets;
 
 import net.buildabrowser.ak4j.AKNodeCalls;
 import net.buildabrowser.ak4j.AKRole;
@@ -17,6 +18,7 @@ public class AKNodeCallsImp implements AKNodeCalls {
 
   private final MethodHandle createNodeHandle;
   private final MethodHandle pushChildHandle;
+  private final MethodHandle setValueHandle;
 
   public AKNodeCallsImp(
     Linker linker
@@ -24,6 +26,7 @@ public class AKNodeCallsImp implements AKNodeCalls {
     this.linker = linker;
     this.createNodeHandle = getCreateNodeMethodHandle();
     this.pushChildHandle = getPushChildMethodHandle();
+    this.setValueHandle = getSetValueMethodHandle();
   }
 
   @Override
@@ -41,7 +44,17 @@ public class AKNodeCallsImp implements AKNodeCalls {
   }
 
   @Override
-  public void setBounds(MemorySegment segment, float x, float y, float w, float h) {
+  public void setValue(MemorySegment node, String value, Arena scope) {
+    MemorySegment valuePtr = scope.allocateFrom(value); // TODO: Handle null character
+    CommonUtil.rethrowV(() -> {
+      setValueHandle.invokeExact(
+        node, 
+        valuePtr,
+        value.getBytes(StandardCharsets.UTF_8).length);});
+  }
+
+  @Override
+  public void setBounds(MemorySegment node, float x, float y, float w, float h) {
     // TODO
   }
 
@@ -65,6 +78,18 @@ public class AKNodeCallsImp implements AKNodeCalls {
     );
 
     return linker.downcallHandle(pushChildMethodAddr, pushChildMethodDesc);
+  }
+
+  private MethodHandle getSetValueMethodHandle() {
+    SymbolLookup symbolLookup = SymbolLookup.loaderLookup();
+    MemorySegment setValueMethodAddr = symbolLookup.findOrThrow("accesskit_node_set_value_with_length");
+    FunctionDescriptor setValueMethodDesc = FunctionDescriptor.ofVoid(
+      ValueLayout.ADDRESS, // node
+      ValueLayout.ADDRESS, // value
+      ValueLayout.JAVA_INT // length
+    );
+
+    return linker.downcallHandle(setValueMethodAddr, setValueMethodDesc);
   }
   
 }

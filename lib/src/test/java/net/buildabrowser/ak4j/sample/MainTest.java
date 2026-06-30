@@ -25,7 +25,7 @@ public class MainTest implements AKCallbacks {
   ) throws InterruptedException {
     try (Arena scope = Arena.ofConfined()) {
       MemorySegment tree = ak4jHandle.createTree(0, scope);
-      MemorySegment update = ak4jHandle.createTreeUpdate(tree, 3, 1, scope);
+      MemorySegment update = ak4jHandle.createTreeUpdate(tree, 4, 1, scope);
       
       MemorySegment rootNode = ak4jHandle.nodes().create(AKRole.WINDOW, scope);
       ak4jHandle.nodes().pushChild(rootNode, 1);
@@ -33,10 +33,18 @@ public class MainTest implements AKCallbacks {
       ak4jHandle.pushTreeUpdateNode(update, 0, rootNode);
 
       MemorySegment buttonNode = ak4jHandle.nodes().create(AKRole.BUTTON, scope);
+      ak4jHandle.nodes().pushChild(buttonNode, 3);
       ak4jHandle.pushTreeUpdateNode(update, 1, buttonNode);
 
       MemorySegment buttonNode2 = ak4jHandle.nodes().create(AKRole.BUTTON, scope);
       ak4jHandle.pushTreeUpdateNode(update, 2, buttonNode2);
+      
+      // TODO: Label is semantically incorrect, but AccessKit removed StaticText
+      // (and text run is ignored)
+      MemorySegment textNode = ak4jHandle.nodes().create(AKRole.LABEL, scope);
+      // TODO: Does accesskit copy the string? If not, it will be free'd too early
+      ak4jHandle.nodes().setValue(textNode, "Hello, World!", scope);
+      ak4jHandle.pushTreeUpdateNode(update, 3, textNode);
 
       return update;
     }

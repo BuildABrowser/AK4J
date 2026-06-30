@@ -11,6 +11,8 @@ public interface AKNodeCalls {
   
   void pushChild(MemorySegment parent, long childId);
 
-  void setBounds(MemorySegment segment, float x, float y, float w, float h);
+  void setValue(MemorySegment node, String value, Arena scope);
+
+  void setBounds(MemorySegment node, float x, float y, float w, float h);
 
 }
